@@ -1,0 +1,792 @@
+#!/bin/sh
+#
+# gjajobs.shl - script to run the job submission process
+#
+# ****************************************************************************
+# *                                                                          *
+# * Copyright 1991-2017 Ellucian Company L.P. and its affiliates.            *
+# *                                                                          *
+# ****************************************************************************
+#
+# parameters  - $1 is the process name
+#               $2 is the process type
+#               $3 is the user id
+#               $4 is the password
+#               $5 is the one up number
+#               $6 is the printer name
+#               $7 is the form name
+#               $8 is the submit time
+#               $9 is the GJRJLIS MIME type
+#               $10 is the GJRJLIS storage days
+#               $11 is the GJRJLIS on-premise print indicator
+#               $12 is the GJRLIS font
+#               $13 is the GJRJLIS font size
+#
+# AUDIT TRAIL: 1.9                                       INIT   DATE
+# 1. New for Job Submission.                              SQ  05-07-91
+#
+# AUDIT TRAIL: 1.10
+# 1. Modified to remove duplicated 'RPT' command.         SQ  08-09-91
+# 2. Modified to pass JOB name to cobol program.          SQ  08-09-91
+# 3. Modified to change the print options.                SQ  09-10-91
+# 4. Modified to add the submit time.                     BS  10-21-91
+# 5. Modified to delete the temporary input file for "P". SQ  12-12-91
+#
+# AUDIT TRAIL: 1.11
+# 1. Added -f to rpf command (CSR 92-4095).              JEF  10-13-92
+# 2. Fixed COBOL procedure build routine (CSR 92-4145).  JEF  11-02-92
+#
+# AUDIT TRAIL: 2.0
+# 1. Changed rpt to be C executable                      SRS  03-25-93
+# 2. NOPRINT option for $6 is not print output           SRS  07-29-93
+#
+# AUDIT TRAIL: 2.1.5
+# 1. Change output and log file names.                    SQ  10-02-95
+# 2. Remove obsolete variables (INP and ERR).             SQ  10-02-95
+#
+# AUDIT TRAIL: 2.1.7
+# 1. Add missing variable to export commands.             SQ  02-01-96
+# 2. Change variable PWD to something else since this     SQ  04-04-96
+#    is a reserved word on HP Unix.
+#
+# AUDIT TRAIL: 2.1.11
+# 1. Change output and log file names.                    TM  09-27-96
+#
+# AUDIT TRAIL: 3.0
+# 1. TAM 06/10/97
+#    Added logic to start the new gurinso Pro*C job that
+#    inserts the generated output files into the database
+#    if the "printer name" ($6) = 'DATABASE'.
+# 2. SJQ 07/07/97
+#    Add logic to redirect connect messages.
+#
+# AUDIT TRAIL: 3.1
+# 1. TAM 11/04/97
+#    Added echo of $PRNT for type 'P' processes so that the shl's
+#    can execute gurinso if this parm = 'DATABASE'.
+# 2. SJQ 02/03/98
+#    Added logic to cause userid and password to be redirected to
+#    the data file and redirected to the program instead of on the
+#    command line for C programs.
+# 3. SJQ 04/12/98
+#    Modify the order in which the files are loaded to the database
+#    so that any errors which occur during the loading of the listing
+#    will be displayed on line in the log file.  Clean up some of the code.
+#
+# AUDIT TRAIL: 6.1.2.1
+# 1. G Shalovka 30 Jan 2004
+#    Defect:  92535.
+#    Problem: Parameter 'UID' is reserved word in LINUX.
+#    Solution:Change parameter 'UID' to 'BANUID'.
+#
+# AUDIT TRAIL: 7.5
+# 1. LVH 18 Jan 2006
+#    Defect:  CMS-DFCT40656
+#    Problem: When processing scripts (option P) that deleted .in or .shl
+#             files an error was generated
+#    Solution:Before files are deleted, there existance will be verified
+# 2. LVH 13 Mar 2006
+#    Defect:  CMS-DFCT102019
+#    Problem: The temporary .shl and .in files did not have proper file
+#             protections.
+#    Solution:A chmod 600 is executed on both files to ensure only the owner
+#             has read and write access.
+#
+# AUDIT TRAIL: 8.0
+# 1. Apply 7.5 modifications to 8.0
+#
+# AUDIT TRAIL: 8.1
+# 1. LVH 06 Jun 2008
+#    RPE:     1-2DGZLW
+#    Problem: The umask value of 000 allows full read and write capability
+#             for user, group and world.
+#    Solution:Depending on how your environment is set up, you may wish to
+#             change the delivered values set by umask.
+#
+#    If jobsub and the users are in different groups you may need to use
+#    umask 000. If they are in the same group you could use 017. If all
+#    reports are run to the database and server access is not required then
+#    you could use 077.
+#
+#    To change the default permissions assigned to your UNIX files and
+#    directories, use the umask command. Its format is
+#        umask nnn
+#    where nnn is a three-digit code that defines the new default permissions.
+#    The umask string does NOT have the same format as the chmod permission
+#    string.
+#
+#    Each of the three numbers represents one of the categories user, group,
+#    and other. The value for a category is calculated as follows:
+#        read permission has a value of 4
+#        write permission has a value of 2
+#        execute permission has a value of 1
+#
+#    Sum the permissions you want to set for the category, then subtract that
+#    value from 7. As an example, examine the current default umask statement
+#    that is used to assign the file protections -rwx-r-x--- :
+#        umask 027
+#    The user category value is 0 because r+w+x = 4+2+1 = 7. When this is
+#    subtracted from 7, the value is 0.
+#    The group category value is 2 because r+x = 4+1 = 5. When this is
+#    subtracted from 7, the value is 2.
+#    The other category value is 7 because no permissions = 0. When this is
+#    subtracted from 7, the value is 7.
+#
+#    For example:
+#
+#       umask 000        Set default to allow full access to everyone
+#       touch test.000   Create file test.000 showing the resulting permissions
+#       umask 017
+#       touch test.017
+#       umask 022
+#       touch test.022
+#       umask 027
+#       touch test.027
+#       umask 077
+#       touch test.077   Allows access to only the owner
+#       ls -l test.*    (execute access (x) does not display for non-executables)
+#         -rw-rw-rw-   Jun 12 12:04 test.000
+#         -rw-rw----   Jun 12 12:05 test.017
+#         -rw-r--r--   Jun 12 12:05 test.022
+#         -rw-r-----   Jun 12 12:05 test.027
+#         -rw-------   Jun 12 12:05 test.077
+#
+#    It is important to note that files created by the jobsub process are not
+#    the same as the user if for whom the process is being run. For example, if
+#    saisusr submits glolett then glolett_12345.log and glotlett_12345.lis will
+#    be owned by the account running jobsub, NOT saisusr. If reports are run
+#    to the database and viewed by gjirevo, then this may not be an issue.
+#    However, if the reports needs to be accessed on the server then it may be.
+#
+#    To determine which group a user is in, use the command: id <username>
+#    i.e. id user001
+#         uid=6356(user001) gid=401(banner)
+#
+# AUDIT TRAIL: 8.3.0.2
+# 1. Defect 1-3N4X4L                         LVH 03/10/2010
+#    Create an empty temporary file and then set permissions
+#    to insure that the file is protected during the echo.
+#
+# AUDIT TRAIL: 8.3.0.4
+# 1. TGKinderman 05/03/2010
+#    NOSLEEP Triggers Community Source initiative project. LKH February-2010
+#    Add sleep delay for NOSLEEP jobs. This is intended to give time for a
+#    nosleep setups to commit prior to attempting to retrieve inserted data
+#    in GJBPRUN.
+#
+# AUDIT TRAIL: 8.4.1.6
+# 1. Defect 1-V2AIX0                              EM 07/28/2011
+#     Backport the changes for defect1-H0SXX0 for general 8.2.x and 8.3.x clients.
+#    a) Added new JOB TYPE 'J'.
+#    b) Added the new JOB TYPE 'J'in case statment to call the corresponding java .shl file.
+#    c) Added the parameter '$JOB' to call the java process
+#       with out $BANUID $PSWD $ONE_UP $PROG $PRNT parameters.
+#
+# AUDIT TRAIL: 8.4.2
+# 1. Defect 1-H0SXX0                              EM 07/28/2011
+#    Added the changes to 8.4.2 version
+#    a) Added new JOB TYPE 'J'.
+#    b) Added the new JOB TYPE 'J'in case statment to call the corresponding java .shl file.
+#    c) Added the parameter '$JOB' to call the java process
+#       with out $BANUID $PSWD $ONE_UP $PROG $PRNT parameters.
+#
+# AUDIT TRAIL: 8.5.1
+# 1. RPE 1-13U6GPZ                              LVH 03/16/2012
+#    Baselining the jsm2gorblob statements used by e-print
+#
+# AUDIT TRAIL: 8.7.3
+# 1. Defect 1-2D5A72                            TGKinderman 10/08/2014
+#    Modify to support column gjbjobs_creds_in_file. A value of Y indicates
+#    to process job obtaining credentials via the filesystem; Otherwise
+#    credentials are passed as positional arguments. This shl is modified to
+#    support running either way under process type P, C or J. A password
+#    value of NOTVALIDPASSWD indicates to this shl that credentials are
+#    obtained from the filesystem; otherwise credentials are passed as 
+#    positional arguments.
+#
+#
+# Abbreviations.
+# AUDIT TRAIL: 8.7.4
+# 1. UC4JOB capture
+# AUDIT TRAIL: 8.9.3
+# 1. CR-000150111 MHockett 10/26/2016
+#    Add file extensions txt,dat,csv,lis2,html,xml of files written for GJIREVO access. 
+# 3. CR-000150111 DDD 6/2017
+#    Execute gjrjlis for jobs submitted with output definition mime 1 or 2
+# 
+# AUDIT TRAIL: 8.9.4
+# 1.  CR-000151566 grep -q is not compatible with AIX 
+#     change expression: if echo $8 | grep -q :; then 
+#     to:  if [ ${#8} -eq 5 ]
+#       then test8=`echo "$8" | cut -c3` fi 
+#       if [ "$test8" =  ":" ]
+# 2.  CR-000152104 gjajobs.shl fails with sh shell - bad substitution error
+#     Push command line arguments into local variables using eval command
+#
+# AUDIT TRAIL END
+#
+# Abbreviations.
+#
+# AUDIT TRAIL END
+#
+# Check if ORACLE_SID = TEST OR PROD
+#UC4 MOD START
+#modification for job capture
+#the following variables must be set and exported for UC4
+echo beginstartcommence
+UC4capture=true
+AGENTNAME=$ORACLE_SID
+if [ "$ORACLE_SID" = "PROD" ]; then
+  workDir=/u01/app/uc4prod/banner/$AGENTNAME
+else
+  workDir=/u01/app/uc4dev/banner/$AGENTNAME
+fi
+captureDir=$workDir/capture
+export workDir AGENTNAME captureDir
+if [ "$UC4" != "true" ]; then
+  if [ "$UC4capture" = "true" ]; then
+    # Mod for General 8.7.3 file credentials 
+    if [ "$4" = "NOTVALIDPASSWD" ]; then 
+    chmod g+r $HOME/$1_$5.in $HOME/$5.creds $HOME/$5.jcred $HOME/gurinso_$5.in 
+    fi 
+    #call capture script to see if job should be captured
+    $captureDir/jobcapture.shl $1 $2 $3 $4 $5 $6 $7 $8
+    ret=$?
+    #if ret not equal to 0 then job was not captured run normally
+    #else job was captured successfully
+    if [ $ret -eq  0 ]; then
+      exit 0
+    fi
+  fi
+fi
+#UC4 MOD END
+#
+umask 000
+H=$HOME
+#LOG="${H}/$1_$5.log"
+#TEMP="$1_$5"
+if [ "$UC4" = "true" ]
+then
+LOG="${H}/`echo $1 | tr "[A-Z]" "[a-z]"`_$5.log"
+TEMP="`echo $1 | tr "[A-Z]" "[a-z]"`_$5"
+else
+LOG="${H}/$1_$5.log"
+TEMP="$1_$5"
+fi
+JOB=""
+PROC="$1"
+BANUID="$3"
+#UC4 MOD START
+#modification so password is not displayed in process list
+if [ "$UC4" = "true" ]
+then
+PSWD="$UC4Pass"
+else
+PSWD="$4"
+fi
+#UC4 MOD END
+UIPW=""
+ONE_UP="$5"
+PRNT="$6"
+FORM=""
+PRNTOPT=""
+SUBTIME="$8"
+UTL_FILE_DIR="/u03/banjobs/gurjobs/$ORACLE_SID/PLSQL_OUTPUT"
+#if time was not submitted print option arguments' indexes will be 1 less
+test8="" 
+test5=`expr "$8" : ".*"` 
+if [ $test5  -eq 5 ]
+then
+  test8=`echo "$8" | cut -c3`
+fi
+ 
+argCount=$#
+index=0
+for param in "$@"
+do
+  index=`expr $index + 1`
+  eval "arg$index"=\$param
+done
+
+if [ "$test8" =  ":" ] 
+then
+  SUBTIME="$arg8"
+  MIME="$arg9"
+  STORE_DAYS="$arg10"
+  FONT="$arg12"
+  FONTSIZE="$arg13"
+  ONPREM_PRINT="$arg11"
+else
+  SUBTIME=
+  MIME="$arg8"
+  STORE_DAYS="$arg9"
+  FONT="$arg11"
+  FONTSIZE="$arg12"
+  ONPREM_PRINT="$arg10"
+fi
+
+ 
+# 
+# Check if not enough or too many parameters have been passed.
+#
+if [ $argCount -eq 0 ] || [ $argCount -gt 13 ]
+   then
+      case $argCount in
+         0) echo "No arguments; aborting";;
+         *) echo "Too many arguments; aborting";;
+      esac
+      exit
+fi
+
+#
+# Determine what type of process is to be run and add extension.
+#    E - executable (assumes cobol)
+#    P - process (assumes shell script)
+#    R - report (assumes RPT)
+#    C - report (assumes C executable)
+#    J - java process (assumes Java executable)
+#    S - procedure (assumes PL/SQL procedure) <-- Added by JTR 6/17/2005
+#
+case $arg2 in
+   E) JOB=$arg1;;
+   P) JOB=`echo $arg1 | tr "[A-Z]" "[a-z]"`.shl
+      PROG=`echo $arg1 | tr "[a-z]" "[A-Z]"`;;
+   R) JOB=`echo $arg1 | tr "[A-Z]" "[a-z]"`.rpt;;
+   C) JOB=`echo $arg1 | tr "[A-Z]" "[a-z]"`;;
+   J) JOB=`echo $arg1 | tr "[A-Z]" "[a-z]"`.shl
+      PROG=`echo $arg1 | tr "[a-z]" "[A-Z]"`;;
+   S) JOB=`echo $arg1 | tr "[A-Z]" "[a-z]"`.sql
+      PROG=`echo $arg1 | tr "[a-z]" "[A-Z]"`;;
+   *) JOB="";;
+esac
+
+#
+# Add sleep delay for NOSLEEP jobs. (CSI nosleep project).
+#    This is intended to give time for a nosleep setups to commit
+#    prior to attempting to retrieve inserted data in GJBPRUN.
+#
+#
+case $arg3 in
+   nosleep) sleep 10;;
+   NOSLEEP) sleep 10;;
+   *)       sleep  0;;
+esac
+
+#
+# Check if the password is set to "/" (meaning $OPS login).
+#UC4 MOD START
+#modification so password is not displayed in process list
+case $PSWD in
+   /) UIPW=$PSWD;;
+   *) UIPW=$arg3/$PSWD;;
+esac
+#UC4 MOD END
+
+#
+# Check the value of the form name parameter.  Convert lowercase letters
+# to uppercase (temporarily) and test if equal to 'PORTRAIT'.
+#
+case `echo $arg7 | tr "[a-z]" "[A-Z]"` in
+   LANDSCAPE) FORM=" -o land";;
+    PORTRAIT) FORM=" -o port";;
+          "") FORM=" -o land";;
+           *) FORM=" $arg7 "
+	   PROBABLY_FF="YES";;
+esac
+
+#
+# Check if printer is set to "default" or "".
+#
+
+if [ "$PRNT" = "default" ] || [ "$PRNT" = "" ]
+then
+   PRNTOPT="lp $FORM"
+   PRNTFF="lp -c"
+else
+   PRNTOPT="lp -d$6 $FORM "
+   PRNTFF="lp -c -d$6"
+fi
+
+if [ "$PROG" = "GLRLETR" ] && [ "$FORM" = " $7 " ]
+  then
+##PVAMU mod 08/26/2013    EXT="doc"
+    EXT="lis"
+##PVAMU mod 08/26/2013 ends
+  else
+    EXT="lis"
+fi
+
+EVIPRINT="$EXE_HOME/evilp $EXE_HOME/evicfg -eviproc $arg1 -evispp $FORM -eviinput $H/$TEMP.$EXT -eviout /tmp/ -evipthru $PRNTOPT -eviprint $PRNTFF"
+
+#
+# Export all variables so they can be accessed by submitted shl script.
+#
+export JOB PROC BANUID PSWD UIPW PRNTOPT PRNT FORM LOG TEMP ONE_UP SUBTIME PROG H EVIPRINT UTL_FILE_DIR MIME STORE_DAYS FONT FONTSIZE ONPREM_PRINT
+#echo $SHELL
+#echo "job: $JOB proc: $PROC banid: $BANUID pswd: $PSWD uipw: $UIPW printopt: $PRNTOPT prnter: $PRNT form: $FORM logname:
+# $LOG temp: $TEMP oneup: $ONE_UP subtime: $SUBTIME program: $PROG home: $H mime: $MIME days: $STORE_DAYS font: $FONT 
+# fontsize: $FONTSIZE onprem: $ONPREM_PRINT"
+
+
+#
+# Determine what type of process is being submitted and build shl script.
+#
+# Change the protection so that only the owner can read and write the file
+#
+cat /dev/null > $H/$TEMP.shl
+chmod 600 $H/$TEMP.shl
+#
+#UC4 modification to catch program exit code 
+progRet=0
+case $2 in
+   E) echo ':'                                          >> $H/$TEMP.shl
+      echo 'CMDFILE=$H/$TEMP.in; export CMDFILE;'       >> $H/$TEMP.shl
+      echo 'echo $BANUID $PSWD $ONE_UP $PROC >$CMDFILE' >> $H/$TEMP.shl
+      echo '$COBPREF$JOB$COBSUFX 1>$LOG 2>&1'           >> $H/$TEMP.shl
+#UC4 MOD START
+#modifications to capture return codes
+      echo 'progRet=$?'                                 >> $H/$TEMP.shl
+#UC4 MOD END
+#      jsm2gorblob.shl                                   >> $H/$TEMP.shl
+      echo '/bin/rm $CMDFILE'                           >> $H/$TEMP.shl
+      echo '/bin/rm $H/$TEMP.shl'                       >> $H/$TEMP.shl
+#UC4 MOD START
+      echo 'exit $progRet'                              >> $H/$TEMP.shl;;
+#UC4 MOD END
+   P) if [ "$PSWD" != "NOTVALIDPASSWD" ]
+      then
+        cat /dev/null                                    > $H/$TEMP.in
+        chmod 600 $H/$TEMP.in
+        echo "$ONE_UP"                                  >> $H/$TEMP.in
+      fi
+      echo '$JOB $BANUID $PSWD $ONE_UP $PROG $PRNT'     >> $H/$TEMP.shl
+#UC4 MOD START
+      echo 'progRet=$?'                                 >> $H/$TEMP.shl
+#UC4 MOD END
+#     jsm2gorblob.shl                                   >> $H/$TEMP.shl
+##
+      if [ "$MIME" = "1" ] || [ "$MIME" = "2" ]
+      then
+        echo 'if [ -r $H/$TEMP.lis ]; then gjrjlis.shl $BANUID $PSWD $ONE_UP $PROC $PRNT $TEMP.lis $MIME $STORE_DAYS $FONT $FONTSIZE; fi' >> $H/$TEMP.shl
+      fi
+
+      if [ "$PSWD" = "NOTVALIDPASSWD" ]
+      then
+        echo 'if [ -f $H/gurinso_$ONE_UP.in ]'            >> $H/$TEMP.shl
+        echo 'then'                                       >> $H/$TEMP.shl
+        echo '/bin/rm $H/gurinso_$ONE_UP.in 1>>$LOG 2>&1' >> $H/$TEMP.shl
+        echo 'fi'                                         >> $H/$TEMP.shl
+        echo 'if [ -f $H/$ONE_UP.creds ]'                 >> $H/$TEMP.shl
+        echo 'then'                                       >> $H/$TEMP.shl
+        echo '/bin/rm $H/$ONE_UP.creds 1>>$LOG 2>&1'      >> $H/$TEMP.shl
+        echo 'fi'                                         >> $H/$TEMP.shl
+        echo 'if [ -f $H/$ONE_UP.jcred ]'                 >> $H/$TEMP.shl
+        echo 'then'                                       >> $H/$TEMP.shl
+        echo '/bin/rm $H/$ONE_UP.jcred 1>>$LOG 2>&1'      >> $H/$TEMP.shl
+        echo 'fi'                                         >> $H/$TEMP.shl
+      fi  
+      echo 'if [ -f $H/$TEMP.in ]'                      >> $H/$TEMP.shl
+      echo 'then'                                       >> $H/$TEMP.shl
+      echo '/bin/rm $H/$TEMP.in'                        >> $H/$TEMP.shl
+      echo 'fi'                                         >> $H/$TEMP.shl
+      echo 'if [ -f $H/$TEMP.shl ]'                     >> $H/$TEMP.shl
+      echo 'then'                                       >> $H/$TEMP.shl
+      echo '/bin/rm $H/$TEMP.shl'                       >> $H/$TEMP.shl
+      echo 'fi'                                         >> $H/$TEMP.shl
+#UC4 MOD START
+      echo 'exit $progRet'                              >> $H/$TEMP.shl;;
+#UC4 MOD END
+   R) cat /dev/null                                      > $H/$TEMP.in
+      chmod 600 $H/$TEMP.in
+      echo "$ONE_UP"                                    >> $H/$TEMP.in
+      echo 'rpt $JOB $H/$TEMP.rpf $UIPW 0<$H/$TEMP.in 1>$LOG 2>&1' \
+                                                        >> $H/$TEMP.shl
+#UC4 MOD START
+      echo 'progRet=$?'                                 >> $H/$TEMP.shl
+#UC4 MOD END
+      echo 'rpf $H/$TEMP.rpf $H/$TEMP.lis -f 1>>$LOG 2>&1' \
+                                                        >> $H/$TEMP.shl
+      if [ "$PRNT" != "NOPRINT" ]
+      then
+        echo 'if [ -r $H/$TEMP.lis ]'                   >> $H/$TEMP.shl
+        echo 'then'                                     >> $H/$TEMP.shl
+        echo '$PRNTOPT $H/$TEMP.lis 1>>$LOG 2>&1'       >> $H/$TEMP.shl
+        echo 'fi'                                       >> $H/$TEMP.shl
+      fi
+#      jsm2gorblob.shl                                   >> $H/$TEMP.shl
+      echo '/bin/rm $H/$TEMP.in $H/$TEMP.rpf 1>>$LOG 2>&1'  \
+                                                        >> $H/$TEMP.shl
+      echo '/bin/rm $H/$TEMP.shl 1>>$LOG 2>&1'          >> $H/$TEMP.shl
+#     echo 'exit 0'                                     >> $H/$TEMP.shl;;
+#UC4 MOD START
+      echo 'exit $progRet'                              >> $H/$TEMP.shl;;
+#UC4 MOD END
+   C) if [ "$PSWD" != "NOTVALIDPASSWD" ]
+      then
+        cat /dev/null                                    > $H/$TEMP.in
+        chmod 600 $H/$TEMP.in
+        echo "$UIPW"                                      >> $H/$TEMP.in
+        echo "$ONE_UP"                                         >> $H/$TEMP.in
+      fi
+      echo '$JOB -f -o $H/$TEMP.lis 0<$H/$TEMP.in 1>$LOG 2>&1' \
+                                                          >> $H/$TEMP.shl
+      if [ "$MIME" = "1" ] || [ "$MIME" = "2" ]
+      then
+        echo 'if [ -r $H/$TEMP.lis ]; then gjrjlis.shl $BANUID $PSWD $ONE_UP $JOB $PRNT $TEMP.lis $MIME $STORE_DAYS $FONT $FONTSIZE; fi' >> $H/$TEMP.shl
+      fi
+      # non log, lis files always get written to gjirevo
+      if [ "$PSWD" != "NOTVALIDPASSWD" ]
+      then
+        for ext in txt html lis2 dat csv xml
+        do
+          echo 'if [ -r $H/$TEMP.'$ext' ]; then gurinso -n $ONE_UP -l $H/$TEMP.'$ext' \
+                  -j $JOB -w $BANUID $UIPW  1>>$LOG 2>&1; fi'  >> $H/$TEMP.shl
+        done
+      else
+        for ext in txt html lis2 dat csv xml
+        do
+          echo 'if [ -r $H/$TEMP.'$ext' ]; then gurinso -n $ONE_UP -l $H/$TEMP.'$ext' \
+                  -y $H/gurinso_$ONE_UP.in -j $JOB -w $BANUID $UIPW 1>>$LOG 2>&1; fi' \
+                 >> $H/$TEMP.shl
+        done
+      fi
+														
+															
+#UC4 MOD START
+      echo 'progRet=$?'                                   >> $H/$TEMP.shl
+#UC4 MOD END
+      if [ "$6" = "DATABASE" ]
+      then
+        if [ "$PSWD" != "NOTVALIDPASSWD" ]
+        then
+          echo 'gurinso -n $ONE_UP -l $H/$TEMP.lis -j $JOB -w $BANUID $UIPW \
+	                                  1>>$LOG 2>&1'   >> $H/$TEMP.shl
+          echo 'gurinso -n $ONE_UP -l $LOG -j $JOB -w $BANUID $UIPW 1>>$LOG 2>&1' \
+							  >> $H/$TEMP.shl
+        else
+          echo 'gurinso -n $ONE_UP -l $H/$TEMP.lis -y $H/gurinso_$ONE_UP.in -j $JOB -w $BANUID $UIPW \
+	                                  1>>$LOG 2>&1'   >> $H/$TEMP.shl
+          echo 'gurinso -n $ONE_UP -l $LOG -y $H/gurinso_$ONE_UP.in -j $JOB -w $BANUID $UIPW 1>>$LOG 2>&1' \
+							  >> $H/$TEMP.shl
+        fi
+      else
+         # log file is always written to gjirevo if gjrjlis save print option is requested
+         if [ "$MIME" = "1" ] || [ "$MIME" = "2" ]
+         then
+             if [ "$PSWD" != "NOTVALIDPASSWD" ]
+                 then
+                   echo 'gurinso -n $ONE_UP -l $LOG -j $JOB -w $BANUID $UIPW 1>>$LOG 2>&1' \
+         							  >> $H/$TEMP.shl
+              else
+                   echo 'gurinso -n $ONE_UP -l $LOG -y $H/gurinso_$ONE_UP.in -j $JOB -w $BANUID $UIPW 1>>$LOG 2>&1' \
+         							  >> $H/$TEMP.shl
+             fi
+         fi
+      fi
+      # only print if printer is available to jobsub server, printers defined on gjalcpr are printed externally
+
+
+      if [ "$PRNT" != "NOPRINT" -a "$PRNT" != "DATABASE"  ]
+      then
+        if [ "$ONPREM_PRINT" = "" ] || [ "$ONPREM_PRINT" = "JOBSUB" ]
+        then	
+        echo 'if [ -r $H/$TEMP.lis ]'                   >> $H/$TEMP.shl
+        echo 'then'                                     >> $H/$TEMP.shl
+        # Evisions mod for FormFusion
+          if [ "$PROBABLY_FF" = "YES" ]
+            then
+              echo '$EVIPRINT 1>>$LOG 2>&1'             >> $H/$TEMP.shl
+            else            
+             echo '$PRNTOPT $H/$TEMP.lis 1>>$LOG 2>&1'  >> $H/$TEMP.shl			 
+          fi
+        echo 'fi'                                       >> $H/$TEMP.shl
+		fi
+      fi
+#      jsm2gorblob.shl                                     >> $H/$TEMP.shl
+      echo '/bin/rm $H/$TEMP.in 1>>$LOG 2>&1'           >> $H/$TEMP.shl
+      echo '/bin/rm $H/$TEMP.shl 1>>$LOG 2>&1'          >> $H/$TEMP.shl      
+      if [ "$PSWD" = "NOTVALIDPASSWD" ]
+      then
+        echo 'if [ -f $H/gurinso_$ONE_UP.in ]'            >> $H/$TEMP.shl
+        echo 'then'                                       >> $H/$TEMP.shl
+        echo '/bin/rm $H/gurinso_$ONE_UP.in 1>>$LOG 2>&1' >> $H/$TEMP.shl
+        echo 'fi'                                         >> $H/$TEMP.shl
+        echo 'if [ -f $H/$ONE_UP.creds ]'                 >> $H/$TEMP.shl
+        echo 'then'                                       >> $H/$TEMP.shl
+        echo '/bin/rm $H/$ONE_UP.creds 1>>$LOG 2>&1'      >> $H/$TEMP.shl
+        echo 'fi'                                         >> $H/$TEMP.shl
+        echo 'if [ -f $H/$ONE_UP.jcred ]'                 >> $H/$TEMP.shl
+        echo 'then'                                       >> $H/$TEMP.shl
+        echo '/bin/rm $H/$ONE_UP.jcred 1>>$LOG 2>&1'      >> $H/$TEMP.shl
+        echo 'fi'                                         >> $H/$TEMP.shl
+      fi  
+#     echo 'exit 0'                                     >> $H/$TEMP.shl;;
+#UC4 MOD START
+      echo 'exit $progRet'                              >> $H/$TEMP.shl;;
+#UC4 MOD END
+   J) cat /dev/null                                      > $H/$TEMP.in
+      chmod 600 $H/$TEMP.in
+      echo "$ONE_UP"                                         >> $H/$TEMP.in
+      echo '$JOB'                                       >> $H/$TEMP.shl
+#UC4 MOD START
+      echo 'progRet=$?'                                 >> $H/$TEMP.shl
+#UC4 MOD END 
+
+      if [ "$MIME" = "1" ] || [ "$MIME" = "2" ]
+      then
+        echo 'if [ -r $H/$TEMP.lis ]; then gjrjlis.shl $BANUID $PSWD $ONE_UP $PROC $PRNT $TEMP.lis $MIME $STORE_DAYS $FONT $FONTSIZE; fi' >> $H/$TEMP.shl
+      fi
+
+		
+#      jsm2gorblob.shl                                   >> $H/$TEMP.shl
+      if [ "$PSWD" = "NOTVALIDPASSWD" ]
+      then
+        echo 'if [ -f $H/gurinso_$ONE_UP.in ]'          >> $H/$TEMP.shl
+        echo 'then'                                     >> $H/$TEMP.shl
+        echo '/bin/rm $H/gurinso_$ONE_UP.in'            >> $H/$TEMP.shl
+        echo 'fi'                                       >> $H/$TEMP.shl
+        echo 'if [ -f $H/$ONE_UP.creds ]'               >> $H/$TEMP.shl
+        echo 'then'                                     >> $H/$TEMP.shl
+        echo '/bin/rm $H/$ONE_UP.creds'                 >> $H/$TEMP.shl
+        echo 'fi'                                       >> $H/$TEMP.shl
+        echo 'if [ -f $H/$ONE_UP.jcred ]'               >> $H/$TEMP.shl
+        echo 'then'                                     >> $H/$TEMP.shl
+        echo '/bin/rm $H/$ONE_UP.jcred'                 >> $H/$TEMP.shl
+        echo 'fi'                                       >> $H/$TEMP.shl
+      fi  
+      echo 'if [ -f $H/$TEMP.in ]'                      >> $H/$TEMP.shl
+      echo 'then'                                       >> $H/$TEMP.shl
+      echo '/bin/rm $H/$TEMP.in'                        >> $H/$TEMP.shl
+      echo 'fi'                                         >> $H/$TEMP.shl
+      echo 'if [ -f $H/$TEMP.shl ]'                     >> $H/$TEMP.shl
+      echo 'then'                                       >> $H/$TEMP.shl
+      echo '/bin/rm $H/$TEMP.shl'                       >> $H/$TEMP.shl
+      echo 'fi'                                         >> $H/$TEMP.shl
+#UC4 MOD START
+      echo 'exit $progRet'                              >> $H/$TEMP.shl;;
+#UC4 MOD END
+   S) echo 'SET SERVEROUTPUT ON'                        > $H/$TEMP.sql
+      echo 'SET ECHO OFF'                               >> $H/$TEMP.sql
+      echo 'BEGIN'                                      >> $H/$TEMP.sql
+      echo "  Z_SECURED_PROCS.CALL_PROC ('$PROG', $ONE_UP, '$UIPW');" >> $H/$TEMP.sql
+      echo 'END;'                                       >> $H/$TEMP.sql
+      echo '/'                                          >> $H/$TEMP.sql
+      echo 'EXIT'                                       >> $H/$TEMP.sql
+      echo 'sqlplus $BANUID/@$PSWD @$H/$TEMP 1>$LOG 2>&1'        > $H/$TEMP.shl
+#UC4 MOD START
+      echo 'progRet=$?'                                >> $H/$TEMP.shl
+#UC4 MOD END
+# jlondon - change begins
+# jlondon - allows more output files than a single *.lis and *.log
+# jlondon      echo 'mv $UTL_FILE_DIR/$TEMP.lis $H'              >> $H/$TEMP.shl
+      echo 'for file in $UTL_FILE_DIR/$TEMP*.*'         >> $H/$TEMP.shl
+      echo '  do'                                       >> $H/$TEMP.shl
+      echo '  mv "${file}" $H'                          >> $H/$TEMP.shl
+      echo '  done'                                     >> $H/$TEMP.shl
+# jlondon - change ends
+      if [ "$6" = "DATABASE" ]
+      then
+# jlondon - change begins
+# jlondon        echo 'gurinso -n $ONE_UP -l $H/$TEMP.lis -j $PROG -w $BANUID $UIPW \
+# jlondon                1>>$LOG 2>&1' >> $H/$TEMP.shl
+# jlondon        echo 'gurinso -n $ONE_UP -l $LOG -j $PROG -w $BANUID $UIPW 1>>$LOG 2>&1' \
+# jlondon                >> $H/$TEMP.shl
+
+     echo 'for file in $H/$TEMP*.*'                >> $H/$TEMP.shl
+     echo '  do'                                    >> $H/$TEMP.shl
+     echo '  EXT=`echo $file | cut -d. -f2` '       >> $H/$TEMP.shl
+     echo '  if [ ${EXT} != sql ] && [ ${EXT} != shl ]'  >> $H/$TEMP.shl
+     echo '   then'                                                   >> $H/$TEMP.shl           # jlondon
+     echo '      gurinso -n $ONE_UP -l "${file}" -j $PROG -w $BANUID $UIPW \
+                                                1>>$LOG 2>&1'   >> $H/$TEMP.shl
+     echo '  fi'                                       >> $H/$TEMP.shl
+     echo '  done'                                     >> $H/$TEMP.shl
+# jlondon - change ends
+# scpallemoni - change begins
+	if [ -f $BANNER_LINKS/$PROC_001.shl ]
+	then
+        echo '  sh $BANNER_LINKS/$PROC_001.shl $ONE_UP $ORACLE_SID $PRNT $PROC' >> $H/$TEMP.shl 
+	fi
+# scpallemoni - change ends
+      fi
+      if [ "$6" != "NOPRINT" -a "$6" != "DATABASE" ]
+      then
+        echo 'if [ -r $H/$TEMP.lis ]'                   >> $H/$TEMP.shl
+        echo 'then'                                     >> $H/$TEMP.shl
+        # Evisions mod for FormFusion
+        if [ "$PROBABLY_FF" = "YES" ]
+          then
+            echo '$EVIPRINT 1>>$LOG 2>&1' >> $H/$TEMP.shl
+          else
+            echo '$PRNTOPT $H/$TEMP.lis 1>>$LOG 2>&1' >> $H/$TEMP.shl
+        fi
+        echo 'fi'                                       >> $H/$TEMP.shl
+      fi
+#	Delete below two lines after testing
+#       echo $BANUID >> /tmp/jaf
+#       echo $PSWD   >> /tmp/jaf
+      echo '/bin/rm $H/$TEMP.sql 1>>$LOG 2>&1'          >> $H/$TEMP.shl
+      echo '/bin/rm $H/$TEMP.shl 1>>$LOG 2>&1'          >> $H/$TEMP.shl
+#     echo 'exit 0'                                     >> $H/$TEMP.shl;;
+#UC4 MOD START
+      echo 'exit $progRet'                              >> $H/$TEMP.shl;;
+#UC4 MOD END
+   
+   *) echo "Invalid JOB TYPE INDICATOR: '$arg2', aborting"  > $LOG;
+      exit;;
+esac
+#
+# Submit shl script just created to run in background and exit.
+#
+# JAF Added for banjsproxy
+TNS_ADMIN=/u05/banjobs/jobsub_proxy/PROD/proxy_setup; export TNS_ADMIN
+#
+#UC4 MOD START
+#UC4 modification run in foreground
+#still run in background as usual if UC4 is not running the job
+subRet=0
+if [ "$UC4" = "true" ]
+then
+    #Run it in foreground
+  sh $H/$TEMP.shl  
+  subRet=$?
+else
+   #Run it in background
+  sh $H/$TEMP.shl  &
+fi
+#UC4 MOD END
+#
+# Undefine all variables that were set by this process.
+#
+H=""
+JOB=""
+PROC=""
+PROG=""
+BANUID=""
+PSWD=""
+UIPW=""
+TEMP=""
+LOG=""
+PRNT=""
+FORM=""
+PRNTOPT=""
+ONE_UP=""
+SUBTIME=""
+EVIPRINT=""
+MIME=""
+STORE_DAYS=""
+FONT=""
+FONTSIZE=""
+ONPREM_PRINT=""
+
+#
+# Export cleared variables.
+#
+export JOB PROC BANUID PSWD UIPW PRNTOPT PRNT FORM LOG TEMP ONE_UP SUBTIME PROG H EVIPRINT MIME STORE_DAYS FONT FONTSIZE ONPREM_PRINT
+
+
+#UC4 MOD START
+#modification to capture return codes
+exit $subRet
+#UC4 MOD END
+

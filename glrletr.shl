@@ -1,0 +1,155 @@
+:
+#/bin/sh
+#
+# ****************************************************************************
+# *                                                                          *
+# * Copyright 1991-2021 Ellucian Company L.P. and its affiliates.            *
+# *                                                                          *
+# ****************************************************************************
+#
+# AUDIT TRAIL: 2.0
+# 1. New script to run glrletr the "RPF" way.                 TM 02/14/94
+# AUDIT TRAIL: 2.1.5
+# 1. Modify to use new rpf emulation program.                 SQ 10/19/95
+# AUDIT TRAIL: 3.1
+# 1. Modify to redirect the userid/password into temp         SQ 02/05/98
+#    file and pipe that to the program to hide it.
+# AUDIT TRAIL: 3.1.2
+# 1. Add logic to remove the temporary file.                  SQ 07/17/99
+# AUDIT TRAIL: 5.5
+# 1. GShalovka 25 Apr 2002
+#    Defect:  45363
+#    Problem: Log files overwritten because name is not unique.
+#    Solution:Add process number ( $3 ) to log file name.
+# 2. GShalovka 25 Apr 2002
+#    Defect:  37153
+#    Problem: Not all output files written to selected output.
+#    Solution:Add printer and database writes.
+# AUDIT TRAIL: 6.1.2.1
+# 1. GShalovka 30 Jan 2004
+#    Defect:  92535.
+#    Problem: Parameter 'UID' is reserved word in LINUX.
+#    Solution:Change parameter 'UID' to 'BANUID'.
+# AUDIT TRAIL: 8.5.1
+# 1. Make parameter input file private                           JWM 02/23/2012
+#    Defect 1-108V2SS
+# AUDIT TRAIL: 8.7.3
+# 1. Defect 1-2D5A72                                     TGKinderman 10/07/2014
+#    Modify to support column gjbjobs_creds_in_file. A value of Y indicates
+#    to process job obtaining credentials via the filesystem; Otherwise
+#    credentials are passed as positional arguments. This shl is modified to
+#    support running either way. A password value of NOTVALIDPASSWD indicates
+#    to this shl that credentials are obtained from the filesystem; otherwise
+#    credentials are passed as positional arguments.
+#
+# AUDIT TRAIL: 8.9.4
+# 1. CR-000150111 Jobsub SaaS                                   DJD 08/2017
+#    Modify to support running in a SaaS environment. Adds variables to
+#    to determine if and how output files should be stored in the database,
+#    and how they are printed.
+#
+# AUDIT TRAIL: 8.13.1
+# 1. CR-000162317    ZH 3/1/2021
+#    Unix shell globbing expands bracket [] encapsulated strings to a modified
+#    Regular Expression. Then if a file or directory matching the regular
+#    expression exists, it returns that object. Otherwise the original 
+#    bracketed string is passed with the brackets intact if no matching object
+#    is found. To workaround the globbing done by all POSIX compliant shells,
+#    the variable can be quoted as to tell the shell not to glob. $BANUID needs
+#    to be quoted in all instances that Oracle Wallet might be in use.
+#    PSWD may also contain brackets
+#
+# AUDIT TRAIL END
+#
+if [ "$2" != "NOTVALIDPASSWD" ]
+  then
+    cat /dev/null >$HOME/$TEMP.in
+    chmod 600 $HOME/$TEMP.in
+    echo "$UIPW"    > $HOME/$TEMP.in
+    echo $ONE_UP >> $HOME/$TEMP.in
+    #
+    glrletr -r -f -o $HOME/$TEMP.rpf 0<$HOME/$TEMP.in 1>$LOG 2>&1
+    #
+    if [ "$PRNT" = "DATABASE" ]
+      then
+        gurinso -n $ONE_UP -l $HOME/$TEMP.log -j $PROC -w "$BANUID" "$UIPW"
+      else
+        # log file is always written to gjirevo if gjrjlis save print option is requested
+        if [ "$MIME" = "1" ] || [ "$MIME" = "2" ]
+        then
+          gurinso -n $ONE_UP -l $HOME/$TEMP.log -j $PROC -w "$BANUID" "$UIPW"
+        fi
+    fi
+    # non-log, non-lis files are always written to GJIREVO
+    if [ -r $HOME/$TEMP.doc ]
+    then
+      gurinso -n $ONE_UP -l $HOME/$TEMP.doc -j $PROC -w "$BANUID" "$UIPW"
+    fi
+    #
+    guaprpf -f -o $HOME/$TEMP.lis $HOME/$TEMP.rpf    1>>$LOG 2>&1
+    #
+    if [ "$PRNT" = "DATABASE" ]
+      then
+        gurinso -n $ONE_UP -l $HOME/$TEMP.lis -j $PROC -w "$BANUID" "$UIPW"
+    fi
+    #
+    if [ -n "$PRNT" ]
+      then
+        if [ "$PRNT" != "NOPRINT" -a "$PRNT" != "DATABASE" ]
+          then
+            # only print if printer is available to jobsub server, printers defined on gjalcpr are printed externally
+            if [ "$ONPREM_PRINT" = "" ] || [ "$ONPREM_PRINT" = "JOBSUB" ]
+            then
+              if [ -r $HOME/$TEMP.lis ]
+              then
+##PVAMU MOD 06/09/15 BEGIN
+##                $PRNTOPT $HOME/$TEMP.lis 1>>$LOG 2>&1
+		$EVIPRINT 1>>$LOG 2>&1
+##PVAMU MOD 06/09/15 END
+              fi
+            fi
+        fi
+    fi
+else
+    #
+    glrletr -r -f -o $HOME/$TEMP.rpf 0<$HOME/$TEMP.in 1>$LOG 2>&1
+    #
+    if [ "$PRNT" = "DATABASE" ]
+      then
+        gurinso -n $ONE_UP -l $HOME/$TEMP.log -y $HOME/gurinso_$3.in -j $PROC -w "$BANUID" "$UIPW"
+    else
+      # log file is always written to gjirevo if gjrjlis save print option is requested
+      if [ "$MIME" = "1" ] || [ "$MIME" = "2" ]
+      then
+        gurinso -n $ONE_UP -l $HOME/$TEMP.log -y $HOME/gurinso_$3.in -j $PROC -w "$BANUID" "$UIPW"
+      fi
+    fi
+    # non log, lis files always get written to gjirevo
+    if [ -r $HOME/$TEMP.doc ]
+    then
+      gurinso -n $ONE_UP -l $HOME/$TEMP.doc -y $HOME/gurinso_$3.in -j $PROC -w "$BANUID" "$UIPW"
+    fi
+    #
+    guaprpf -f -o $HOME/$TEMP.lis $HOME/$TEMP.rpf    1>>$LOG 2>&1
+    #
+    if [ "$PRNT" = "DATABASE" ]
+    then
+      gurinso -n $ONE_UP -l $HOME/$TEMP.lis -y $HOME/gurinso_$3.in -j $PROC -w "$BANUID" "$UIPW"
+    fi
+    #
+    if [ -n "$PRNT" ]
+      then
+        if [ "$PRNT" != "NOPRINT" -a "$PRNT" != "DATABASE" ]
+          then
+            if [ -r $HOME/$TEMP.lis ]
+              then
+##PVAMU MOD 06/09/15 BEGIN
+##                $PRNTOPT $HOME/$TEMP.lis 1>>$LOG 2>&1
+                $EVIPRINT 1>>$LOG 2>&1
+##PVAMU MOD 06/09/15 END
+            fi
+        fi
+    fi
+fi
+#
+/bin/rm $HOME/$TEMP.in
